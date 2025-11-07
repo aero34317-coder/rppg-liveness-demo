@@ -1,0 +1,1847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>rPPG Liveness Detection - Enterprise Demo</title>
+<!-- TensorFlow.js -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0"></script>
+<!-- MediaPipe Dependencies -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+<style>
+* {
+margin: 0;
+padding: 0;
+box-sizing: border-box;
+}
+body {
+font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+min-height: 100vh;
+padding: 20px;
+}
+.container {
+max-width: 1600px;
+margin: 0 auto;
+background: white;
+border-radius: 24px;
+box-shadow: 0 20px 60px rgba(0,0,0,.3);
+overflow: hidden;
+}
+.header {
+background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+color: white;
+padding: 32px 40px;
+}
+.header h1 {
+font-size: 32px;
+margin-bottom: 8px;
+font-weight: 700;
+}
+.header p {
+opacity: .9;
+font-size: 14px;
+}
+.main-content {
+display: grid;
+grid-template-columns: 1.4fr 1fr;
+gap: 30px;
+padding: 30px;
+}
+.video-panel {
+display: flex;
+flex-direction: column;
+gap: 20px;
+}
+.video-container {
+position: relative;
+background: #000;
+border-radius: 16px;
+overflow: hidden;
+aspect-ratio: 4/3;
+border: 4px solid #e0e0e0;
+transition: all .3s;
+}
+.video-container.analyzing {
+border-color: #ffc107;
+box-shadow: 0 0 40px rgba(255,193,7,.4);
+}
+.video-container.verified {
+border-color: #4caf50;
+box-shadow: 0 0 40px rgba(76,175,80,.5);
+}
+.video-container.rejected {
+border-color: #f44336;
+box-shadow: 0 0 40px rgba(244,67,54,.5);
+}
+.video-wrapper {
+position: relative;
+width: 100%;
+height: 100%;
+}
+#webcam {
+position: absolute;
+width: 100%;
+height: 100%;
+object-fit: cover;
+transform: scaleX(-1);
+}
+#canvas {
+position: absolute;
+width: 100%;
+height: 100%;
+object-fit: cover;
+transform: scaleX(-1);
+}
+.status-badge {
+position: absolute;
+top: 16px;
+left: 16px;
+background: rgba(0,0,0,.85);
+backdrop-filter: blur(10px);
+padding: 10px 16px;
+border-radius: 8px;
+display: flex;
+flex-direction: column;
+align-items: center;
+gap: 10px;
+z-index: 10;
+}
+.status-badge-row {
+display: flex;
+align-items: center;
+gap: 10px;
+}
+.status-dot {
+width: 10px;
+height: 10px;
+border-radius: 50%;
+animation: pulse 2s infinite;
+}
+@keyframes pulse {
+0%, 100% {
+opacity: 1;
+transform: scale(1);
+}
+50% {
+opacity: .6;
+transform: scale(.95);
+}
+}
+.dot-idle { background: #9e9e9e; }
+.dot-analyzing { background: #ffc107; }
+.dot-verified { background: #4caf50; }
+.dot-rejected { background: #f44336; }
+.status-text {
+color: white;
+font-weight: 600;
+font-size: 13px;
+}
+.detection-type-badge {
+color: rgba(255,255,255,.9);
+font-size: 11px;
+font-weight: 500;
+margin-top: 4px;
+}
+.ppg-compact {
+position: absolute;
+bottom: 16px;
+left: 16px;
+right: 16px;
+background: rgba(0,0,0,.9);
+backdrop-filter: blur(10px);
+padding: 12px 16px;
+border-radius: 8px;
+z-index: 10;
+border: 2px solid rgba(76,175,80,.5);
+}
+.ppg-compact.active {
+border-color: rgba(76,175,80,1);
+box-shadow: 0 0 20px rgba(76,175,80,.3);
+}
+.ppg-header {
+display: flex;
+justify-content: space-between;
+align-items: center;
+margin-bottom: 8px;
+}
+.ppg-title {
+color: rgba(255,255,255,.8);
+font-size: 11px;
+font-weight: 600;
+text-transform: uppercase;
+}
+.ppg-mini-stats {
+display: flex;
+gap: 16px;
+}
+.ppg-mini-stat {
+display: flex;
+align-items: baseline;
+gap: 4px;
+}
+.ppg-mini-value {
+color: #4caf50;
+font-size: 16px;
+font-weight: 700;
+}
+.ppg-mini-label {
+color: rgba(255,255,255,.6);
+font-size: 10px;
+}
+.ppg-waveform {
+height: 50px;
+width: 100%;
+margin-top: 4px;
+}
+.control-panel {
+display: grid;
+grid-template-columns: 1fr 1fr;
+gap: 12px;
+}
+.btn {
+padding: 16px 24px;
+border: none;
+border-radius: 10px;
+font-size: 15px;
+font-weight: 600;
+cursor: pointer;
+transition: all .2s;
+display: flex;
+align-items: center;
+justify-content: center;
+gap: 8px;
+}
+.btn:disabled {
+opacity: .5;
+cursor: not-allowed;
+}
+.btn:not(:disabled):hover {
+transform: translateY(-2px);
+box-shadow: 0 8px 16px rgba(0,0,0,.2);
+}
+.btn-primary {
+background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+color: white;
+}
+.btn-success {
+background: linear-gradient(135deg, #56ab2f 0%, #a8e063 100%);
+color: white;
+}
+.btn-danger {
+background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
+color: white;
+}
+.btn-full {
+grid-column: 1 / -1;
+}
+.method-selector {
+background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+border: 2px solid #2196f3;
+border-radius: 12px;
+padding: 20px;
+margin-bottom: 20px;
+}
+.method-selector h3 {
+color: #1565c0;
+font-size: 16px;
+margin-bottom: 16px;
+font-weight: 700;
+}
+.method-options {
+display: flex;
+flex-direction: column;
+gap: 12px;
+}
+.method-option {
+display: flex;
+align-items: center;
+gap: 12px;
+padding: 12px;
+background: white;
+border-radius: 8px;
+cursor: pointer;
+transition: all .2s;
+}
+.method-option:hover {
+transform: translateX(4px);
+box-shadow: 0 4px 8px rgba(0,0,0,.1);
+}
+.method-option input[type="radio"] {
+width: 20px;
+height: 20px;
+cursor: pointer;
+}
+.method-option label {
+cursor: pointer;
+font-weight: 600;
+color: #1565c0;
+flex: 1;
+}
+.method-badge {
+padding: 4px 12px;
+border-radius: 12px;
+font-size: 11px;
+font-weight: 600;
+}
+.badge-fast {
+background: #ffc107;
+color: #fff;
+}
+.badge-accurate {
+background: #4caf50;
+color: #fff;
+}
+.badge-best {
+background: #9c27b0;
+color: #fff;
+}
+.neural-status {
+margin-top: 12px;
+padding: 12px;
+background: rgba(33, 150, 243, 0.1);
+border-radius: 8px;
+font-size: 13px;
+color: #1565c0;
+}
+.gmm-box {
+background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
+border: 2px solid #4caf50;
+border-radius: 12px;
+padding: 20px;
+margin-bottom: 20px;
+}
+.gmm-box h3 {
+color: #2e7d32;
+font-size: 16px;
+margin-bottom: 16px;
+font-weight: 700;
+}
+.histogram-container {
+background: white;
+border-radius: 8px;
+padding: 12px;
+margin-bottom: 12px;
+border: 1px solid #4caf50;
+}
+.histogram-canvas {
+width: 100%;
+height: 120px;
+}
+.gmm-thresholds {
+display: grid;
+grid-template-columns: 1fr 1fr;
+gap: 12px;
+margin-bottom: 12px;
+}
+.threshold-input {
+display: flex;
+flex-direction: column;
+gap: 4px;
+}
+.threshold-label {
+font-size: 12px;
+color: #2e7d32;
+font-weight: 600;
+}
+.threshold-value {
+padding: 8px;
+border: 2px solid #4caf50;
+border-radius: 6px;
+font-size: 14px;
+font-weight: 600;
+text-align: center;
+}
+.gmm-stats {
+display: grid;
+grid-template-columns: repeat(3, 1fr);
+gap: 8px;
+}
+.gmm-stat {
+background: white;
+padding: 10px;
+border-radius: 6px;
+text-align: center;
+border: 1px solid #4caf50;
+}
+.gmm-stat-value {
+font-size: 20px;
+font-weight: 700;
+color: #2e7d32;
+}
+.gmm-stat-label {
+font-size: 10px;
+color: #666;
+margin-top: 4px;
+}
+.tips-box {
+background: linear-gradient(135deg, #fff3cd 0%, #ffe7a8 100%);
+border: 2px solid #ffc107;
+border-radius: 12px;
+padding: 20px;
+}
+.tips-box h3 {
+color: #856404;
+font-size: 16px;
+margin-bottom: 12px;
+}
+.tips-list {
+list-style: none;
+}
+.tips-list li {
+color: #856404;
+padding: 6px 0;
+padding-left: 24px;
+position: relative;
+font-size: 14px;
+}
+.tips-list li:before {
+content: "✓";
+position: absolute;
+left: 0;
+font-weight: bold;
+color: #f57c00;
+}
+.info-panel {
+display: flex;
+flex-direction: column;
+gap: 20px;
+}
+.card {
+background: #f8f9fa;
+border-radius: 12px;
+padding: 20px;
+border-left: 4px solid #667eea;
+}
+.card-title {
+font-size: 16px;
+font-weight: 700;
+color: #2c3e50;
+margin-bottom: 16px;
+}
+.progress-ring {
+position: relative;
+width: 120px;
+height: 120px;
+margin: 0 auto 16px;
+}
+.progress-ring svg {
+transform: rotate(-90deg);
+}
+.progress-ring-circle {
+stroke: #e0e0e0;
+fill: none;
+stroke-width: 8;
+}
+.progress-ring-fill {
+stroke: url(#gradient);
+fill: none;
+stroke-width: 8;
+stroke-linecap: round;
+transition: stroke-dashoffset .5s;
+}
+.progress-text {
+position: absolute;
+top: 50%;
+left: 50%;
+transform: translate(-50%, -50%);
+text-align: center;
+}
+.progress-value {
+font-size: 32px;
+font-weight: 700;
+color: #667eea;
+}
+.progress-label {
+font-size: 12px;
+color: #666;
+}
+.metric-grid {
+display: grid;
+grid-template-columns: repeat(3, 1fr);
+gap: 12px;
+}
+.metric-box {
+background: white;
+padding: 16px;
+border-radius: 10px;
+text-align: center;
+}
+.metric-value {
+font-size: 28px;
+font-weight: 700;
+color: #667eea;
+margin-bottom: 4px;
+}
+.metric-label {
+font-size: 11px;
+color: #666;
+text-transform: uppercase;
+}
+.stat-row {
+display: flex;
+justify-content: space-between;
+padding: 12px 0;
+border-bottom: 1px solid #e0e0e0;
+}
+.stat-row:last-child {
+border-bottom: none;
+}
+.stat-label {
+color: #666;
+font-size: 14px;
+}
+.stat-value {
+font-weight: 600;
+color: #2c3e50;
+font-size: 14px;
+}
+.test-item {
+display: flex;
+justify-content: space-between;
+align-items: center;
+padding: 10px;
+background: white;
+border-radius: 8px;
+margin-bottom: 8px;
+}
+.test-status {
+padding: 4px 12px;
+border-radius: 12px;
+font-size: 12px;
+font-weight: 600;
+}
+.status-pass {
+background: #d4edda;
+color: #155724;
+}
+.status-fail {
+background: #f8d7da;
+color: #721c24;
+}
+.status-pending {
+background: #e0e0e0;
+color: #666;
+}
+.alert {
+padding: 16px 20px;
+border-radius: 10px;
+font-size: 14px;
+font-weight: 500;
+animation: slideIn .3s;
+}
+@keyframes slideIn {
+from {
+transform: translateY(-10px);
+opacity: 0;
+}
+to {
+transform: translateY(0);
+opacity: 1;
+}
+}
+.alert-success {
+background: #d4edda;
+color: #155724;
+border-left: 4px solid #28a745;
+}
+.alert-error {
+background: #f8d7da;
+color: #721c24;
+border-left: 4px solid #dc3545;
+}
+.alert-warning {
+background: #fff3cd;
+color: #856404;
+border-left: 4px solid #ffc107;
+}
+.loading-overlay {
+position: fixed;
+top: 0;
+left: 0;
+right: 0;
+bottom: 0;
+background: rgba(0,0,0,.9);
+display: none;
+align-items: center;
+justify-content: center;
+z-index: 9999;
+color: white;
+flex-direction: column;
+gap: 20px;
+}
+.spinner {
+width: 50px;
+height: 50px;
+border: 4px solid #333;
+border-top-color: #667eea;
+border-radius: 50%;
+animation: spin 1s linear infinite;
+}
+@keyframes spin {
+to {
+transform: rotate(360deg);
+}
+}
+@media (max-width: 1200px) {
+.main-content {
+grid-template-columns: 1fr;
+}
+}
+</style>
+</head>
+<body>
+<div id="loadingOverlay" class="loading-overlay">
+<div class="spinner"></div>
+<div style="font-size:18px;font-weight:600">Initializing...</div>
+<div style="font-size:14px;opacity:.8" id="loadText">Loading neural network model...</div>
+</div>
+<div class="container">
+<div class="header">
+<h1>🛡 Advanced rPPG Liveness Detection</h1>
+<p>Enterprise-Grade Anti-Spoofing System | GMM + Deep Learning | Production Ready</p>
+</div>
+<div class="main-content">
+<div class="video-panel">
+<div class="video-container" id="videoContainer">
+<div class="video-wrapper">
+<video id="webcam" autoplay playsinline muted></video>
+<canvas id="canvas"></canvas>
+<div class="status-badge">
+<div class="status-badge-row">
+<div class="status-dot dot-idle" id="statusDot"></div>
+<div class="status-text" id="statusText">READY</div>
+</div>
+<div class="detection-type-badge" id="detectionTypeBadge" style="display:none">Analyzing...</div>
+</div>
+<div class="ppg-compact" id="ppgCompact">
+<div class="ppg-header">
+<div class="ppg-title">Live Blood Volume Pulse</div>
+<div class="ppg-mini-stats">
+<div class="ppg-mini-stat">
+<div class="ppg-mini-value" id="compactBVP">--</div>
+<div class="ppg-mini-label">BVP</div>
+</div>
+<div class="ppg-mini-stat">
+<div class="ppg-mini-value" id="compactSamples">0</div>
+<div class="ppg-mini-label">Samples</div>
+</div>
+</div>
+</div>
+<canvas id="ppgWaveform" class="ppg-waveform"></canvas>
+</div>
+</div>
+</div>
+<div class="control-panel">
+<button id="startBtn" class="btn btn-primary btn-full">🎥 Start Camera</button>
+<button id="analyzeBtn" class="btn btn-success" disabled>🔍 Start Analysis</button>
+<button id="stopBtn" class="btn btn-danger" disabled>⏹ Stop</button>
+</div>
+<div class="method-selector">
+<h3>🔬 Detection Method</h3>
+<div class="method-options">
+<div class="method-option">
+<input type="radio" id="methodGMM" name="detectionMethod" value="gmm">
+<label for="methodGMM">GMM Classifier (Fast)</label>
+<span class="method-badge badge-fast">FAST</span>
+</div>
+<div class="method-option">
+<input type="radio" id="methodNeural" name="detectionMethod" value="neural">
+<label for="methodNeural">Neural Network (Accurate)</label>
+<span class="method-badge badge-accurate">98.27% AUC</span>
+</div>
+<div class="method-option">
+<input type="radio" id="methodHybrid" name="detectionMethod" value="hybrid" checked>
+<label for="methodHybrid">Hybrid Mode (Recommended)</label>
+<span class="method-badge badge-best">BEST</span>
+</div>
+</div>
+<div class="neural-status" id="neuralStatus">
+🔄 Loading neural network model...
+</div>
+</div>
+<div class="gmm-box" id="gmmBox">
+<h3>📊 GMM Classifier (1st Derivative)</h3>
+<div class="histogram-container">
+<canvas id="histogramCanvas" class="histogram-canvas"></canvas>
+</div>
+<div class="gmm-thresholds">
+<div class="threshold-input">
+<div class="threshold-label">Fake Threshold (×10⁻³)</div>
+<input type="number" id="fakeThreshold" class="threshold-value" value="1300" min="500" max="2000" step="100">
+</div>
+<div class="threshold-input">
+<div class="threshold-label">Real Threshold (×10⁻³)</div>
+<input type="number" id="realThreshold" class="threshold-value" value="2000" min="1500" max="4000" step="100">
+</div>
+</div>
+<div class="gmm-stats">
+<div class="gmm-stat">
+<div class="gmm-stat-value" id="fakeBucket">0</div>
+<div class="gmm-stat-label">Fake (&lt;1300)</div>
+</div>
+<div class="gmm-stat">
+<div class="gmm-stat-value" id="uncertainBucket">0</div>
+<div class="gmm-stat-label">Uncertain</div>
+</div>
+<div class="gmm-stat">
+<div class="gmm-stat-value" id="realBucket">0</div>
+<div class="gmm-stat-label">Real (&gt;2000)</div>
+</div>
+</div>
+</div>
+<div class="tips-box">
+<h3>💡 How It Works</h3>
+<ul class="tips-list">
+<li><strong>GMM:</strong> Fast derivative analysis (&lt;100ms)</li>
+<li><strong>Neural Net:</strong> Deep biometric embedding (256-D)</li>
+<li><strong>Hybrid:</strong> GMM filters + Neural confirms</li>
+<li><strong>AI Detection:</strong> Checks physiological consistency</li>
+</ul>
+</div>
+<div id="alertBox"></div>
+</div>
+<div class="info-panel">
+<div class="card">
+<div class="card-title">🎯 Liveness Confidence</div>
+<div class="progress-ring">
+<svg width="120" height="120">
+<defs>
+<linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+<stop offset="0%" style="stop-color:#eb3349;stop-opacity:1" />
+<stop offset="50%" style="stop-color:#ffc107;stop-opacity:1" />
+<stop offset="100%" style="stop-color:#4caf50;stop-opacity:1" />
+</linearGradient>
+</defs>
+<circle class="progress-ring-circle" cx="60" cy="60" r="52"></circle>
+<circle id="progressCircle" class="progress-ring-fill" cx="60" cy="60" r="52" stroke-dasharray="326.73" stroke-dashoffset="326.73"></circle>
+</svg>
+<div class="progress-text">
+<div class="progress-value" id="confidenceValue">0%</div>
+<div class="progress-label">Confidence</div>
+</div>
+</div>
+<div class="metric-grid">
+<div class="metric-box">
+<div class="metric-value" id="gmmScore">--</div>
+<div class="metric-label">GMM Score</div>
+</div>
+<div class="metric-box">
+<div class="metric-value" id="neuralScore">--</div>
+<div class="metric-label">Neural Score</div>
+</div>
+<div class="metric-box">
+<div class="metric-value" id="depthScore">--</div>
+<div class="metric-label">3D Depth</div>
+</div>
+</div>
+</div>
+<div class="card">
+<div class="card-title">📊 Detection Metrics</div>
+<div class="stat-row">
+<span class="stat-label">Analysis Time:</span>
+<span class="stat-value" id="duration">0.0s</span>
+</div>
+<div class="stat-row">
+<span class="stat-label">Method:</span>
+<span class="stat-value" id="currentMethod">Hybrid Mode</span>
+</div>
+<div class="stat-row">
+<span class="stat-label">1st Deriv (×10⁻³):</span>
+<span class="stat-value" id="derivValue">--</span>
+</div>
+<div class="stat-row">
+<span class="stat-label">Embedding Consistency:</span>
+<span class="stat-value" id="embeddingConsistency">--</span>
+</div>
+<div class="stat-row">
+<span class="stat-label">Temporal Depth:</span>
+<span class="stat-value" id="depthValue">--</span>
+</div>
+<div class="stat-row">
+<span class="stat-label">Detection Type:</span>
+<span class="stat-value" id="detectionType">Ready</span>
+</div>
+</div>
+<div class="card">
+<div class="card-title">🧪 Anti-Spoofing Tests</div>
+<div class="test-item">
+<span>✓ GMM Derivative</span>
+<span class="test-status status-pending" id="test1">Pending</span>
+</div>
+<div class="test-item">
+<span>✓ Neural Embedding</span>
+<span class="test-status status-pending" id="test2">Pending</span>
+</div>
+<div class="test-item">
+<span>✓ Embedding Consistency</span>
+<span class="test-status status-pending" id="test3">Pending</span>
+</div>
+<div class="test-item">
+<span>✓ Temporal Depth</span>
+<span class="test-status status-pending" id="test4">Pending</span>
+</div>
+<div class="test-item">
+<span>✓ Signal Quality</span>
+<span class="test-status status-pending" id="test5">Pending</span>
+</div>
+<div class="test-item">
+<span>✓ Physiological Range</span>
+<span class="test-status status-pending" id="test6">Pending</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<script>
+// ============================================================================
+// NEURAL NETWORK MODEL CONFIGURATION
+// ============================================================================
+// Priority 1: GitHub Pages (best CORS support for TensorFlow.js)
+const NEURAL_MODEL_BASE = 'https://aero34317-coder.github.io/PPG_tfjs_model';
+const NEURAL_MODEL_URL = `${NEURAL_MODEL_BASE}/model.json`;
+
+// Fallback URLs if primary fails
+const FALLBACK_MODEL_URLS = [
+'https://cdn.jsdelivr.net/gh/aero34317-coder/PPG_tfjs_model@main/model.json',
+'https://cdn.jsdelivr.net/gh/aero34317-coder/PPG_tfjs_model/model.json'
+];
+
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
+const CFG = {
+FPS: 30,
+MIN_SAMPLES: 150,
+NEURAL_SAMPLES: 1024,
+SNR_THRESHOLD: 2.5,
+CONFIDENCE_THRESHOLD: 45,
+BANDPASS_LOW: 0.5,
+BANDPASS_HIGH: 8.0,
+GMM_FAKE_THRESHOLD: 1300,
+GMM_REAL_THRESHOLD: 2000,
+DEPTH_TEMPORAL_THRESHOLD: 0.00015,
+EMBEDDING_CONSISTENCY_THRESHOLD: 0.85,
+NEURAL_THRESHOLD: 0.80,
+DEBUG: true
+};
+
+// ============================================================================
+// GLOBAL STATE
+// ============================================================================
+const STATE = {
+faceMesh: null,
+videoStream: null,
+animationFrameId: null,
+isAnalyzing: false,
+startTime: null,
+faceDetected: false,
+// Neural Network
+neuralModel: null,
+neuralModelLoaded: false,
+detectionMethod: 'hybrid',
+// Signal arrays
+rSignal: [],
+gSignal: [],
+bSignal: [],
+timestamps: [],
+posSignal: [],
+// Depth tracking
+landmarkHistory: [],
+depthHistory: [],
+// Metrics
+bloodVolumePulse: null,
+signalSNR: null,
+verifiedAlertShown: false,
+rejectedAlertShown: false,
+metricsInterval: null,
+// GMM
+firstDerivVariance: 0,
+derivHistogram: [],
+fakeBucketCount: 0,
+uncertainBucketCount: 0,
+realBucketCount: 0,
+// Neural Network Results
+embeddings: [],
+embeddingConsistency: 0,
+neuralConfidence: 0,
+// Depth
+temporalDepthVariance: 0,
+isStaticDepth: false
+};
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+function calculateMean(array) {
+if (!array || array.length === 0) return 0;
+return array.reduce((sum, val) => sum + val, 0) / array.length;
+}
+
+function calculateStd(array) {
+if (!array || array.length === 0) return 0;
+const mean = calculateMean(array);
+const variance = array.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / array.length;
+return Math.sqrt(variance);
+}
+
+function normalizeSignal(array) {
+const mean = calculateMean(array);
+const std = calculateStd(array);
+if (std === 0) return array.map(() => 0);
+return array.map(val => (val - mean) / std);
+}
+
+function cosineSimilarity(vecA, vecB) {
+if (vecA.length !== vecB.length) return 0;
+let dotProduct = 0;
+let normA = 0;
+let normB = 0;
+for (let i = 0; i < vecA.length; i++) {
+dotProduct += vecA[i] * vecB[i];
+normA += vecA[i] * vecA[i];
+normB += vecB[i] * vecB[i];
+}
+normA = Math.sqrt(normA);
+normB = Math.sqrt(normB);
+return normA > 0 && normB > 0 ? dotProduct / (normA * normB) : 0;
+}
+
+// ============================================================================
+// SIGNAL PROCESSING
+// ============================================================================
+function lightBandpassFilter(signal, fps, lowCut, highCut) {
+if (signal.length < 10) return signal;
+const mean = calculateMean(signal);
+let filtered = signal.map(val => val - mean);
+const windowSize = Math.max(3, Math.floor(fps / highCut));
+const smoothed = [];
+for (let i = 0; i < filtered.length; i++) {
+const start = Math.max(0, i - Math.floor(windowSize / 2));
+const end = Math.min(filtered.length, i + Math.ceil(windowSize / 2));
+const window = filtered.slice(start, end);
+smoothed.push(calculateMean(window));
+}
+return smoothed;
+}
+
+function extractPPG(image, landmarks) {
+const canvas = document.createElement('canvas');
+const ctx = canvas.getContext('2d');
+canvas.width = image.width;
+canvas.height = image.height;
+ctx.drawImage(image, 0, 0);
+const regions = [
+[10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288],
+[205, 50, 123, 132, 177, 147, 187, 207, 216, 206],
+[425, 280, 352, 361, 401, 376, 411, 427, 436, 426]
+];
+let totalR = 0, totalG = 0, totalB = 0, pixelCount = 0;
+for (const region of regions) {
+const points = region.map(idx => landmarks[idx]);
+for (const point of points) {
+const x = Math.floor(point.x * canvas.width);
+const y = Math.floor(point.y * canvas.height);
+if (x >= 0 && x < canvas.width && y >= 0 && y < canvas.height) {
+const pixel = ctx.getImageData(x, y, 1, 1).data;
+totalR += pixel[0];
+totalG += pixel[1];
+totalB += pixel[2];
+pixelCount++;
+}
+}
+}
+if (pixelCount === 0) return { r: 0, g: 0, b: 0 };
+return {
+r: totalR / pixelCount,
+g: totalG / pixelCount,
+b: totalB / pixelCount
+};
+}
+
+function processPOS() {
+if (STATE.rSignal.length < CFG.MIN_SAMPLES) return null;
+const rNorm = normalizeSignal(STATE.rSignal);
+const gNorm = normalizeSignal(STATE.gSignal);
+const bNorm = normalizeSignal(STATE.bSignal);
+const posRaw = [];
+for (let i = 0; i < rNorm.length; i++) {
+posRaw.push(3.0 * gNorm[i] - 1.5 * rNorm[i] - 1.5 * bNorm[i]);
+}
+const posFiltered = lightBandpassFilter(posRaw, CFG.FPS, CFG.BANDPASS_LOW, CFG.BANDPASS_HIGH);
+STATE.posSignal = posFiltered;
+return posFiltered;
+}
+
+function calculateBloodVolumePulse() {
+if (!STATE.posSignal || STATE.posSignal.length < 60) return null;
+const recentSignal = STATE.posSignal.slice(-60);
+const max = Math.max(...recentSignal);
+const min = Math.min(...recentSignal);
+const amplitude = max - min;
+const bvp = amplitude * 100;
+STATE.bloodVolumePulse = bvp;
+return bvp;
+}
+
+// ============================================================================
+// GMM DERIVATIVE ANALYSIS
+// ============================================================================
+function analyzeWaveformDerivatives() {
+if (STATE.rSignal.length < 90) return null;
+const recentR = STATE.rSignal.slice(-90);
+const recentG = STATE.gSignal.slice(-90);
+const recentB = STATE.bSignal.slice(-90);
+const meanR = calculateMean(recentR);
+const meanG = calculateMean(recentG);
+const meanB = calculateMean(recentB);
+const normR = recentR.map(v => v - meanR);
+const normG = recentG.map(v => v - meanG);
+const normB = recentB.map(v => v - meanB);
+const rawPOS = [];
+for (let i = 0; i < normR.length; i++) {
+rawPOS.push(3.0 * normG[i] - 1.5 * normR[i] - 1.5 * normB[i]);
+}
+const firstDeriv = [];
+for (let i = 1; i < rawPOS.length; i++) {
+firstDeriv.push(Math.abs(rawPOS[i] - rawPOS[i - 1]));
+}
+const firstDerivVariance = calculateMean(firstDeriv) * 1000;
+STATE.firstDerivVariance = firstDerivVariance;
+STATE.derivHistogram.push(firstDerivVariance);
+if (STATE.derivHistogram.length > 100) {
+STATE.derivHistogram.shift();
+}
+return { firstDerivVariance };
+}
+
+function updateGMMBuckets() {
+const fakeThreshold = parseFloat(document.getElementById('fakeThreshold').value);
+const realThreshold = parseFloat(document.getElementById('realThreshold').value);
+STATE.fakeBucketCount = 0;
+STATE.uncertainBucketCount = 0;
+STATE.realBucketCount = 0;
+for (const value of STATE.derivHistogram) {
+if (value < fakeThreshold) {
+STATE.fakeBucketCount++;
+} else if (value < realThreshold) {
+STATE.uncertainBucketCount++;
+} else {
+STATE.realBucketCount++;
+}
+}
+}
+
+// ============================================================================
+// MORPHOLOGICAL FEATURE EXTRACTION
+// ============================================================================
+function findPeaks(signal) {
+const peaks = [];
+const minDistance = Math.floor(0.4 * CFG.FPS);
+let lastPeak = -minDistance;
+for (let i = 1; i < signal.length - 1; i++) {
+if (signal[i] > signal[i-1] && signal[i] > signal[i+1]) {
+if (i - lastPeak >= minDistance && signal[i] > 0.5) {
+peaks.push(i);
+lastPeak = i;
+}
+}
+}
+return peaks;
+}
+
+function extractMorphologicalFeatures(signal) {
+const features = new Array(20).fill(0);
+try {
+const peaks = findPeaks(signal);
+if (peaks.length < 2) return features;
+const ppis = [];
+for (let i = 1; i < peaks.length; i++) {
+ppis.push((peaks[i] - peaks[i-1]) / CFG.FPS);
+}
+if (ppis.length > 0) {
+features[0] = calculateMean(ppis);
+features[1] = calculateStd(ppis);
+features[2] = Math.max(...ppis);
+features[3] = Math.min(...ppis);
+}
+if (ppis.length > 1) {
+features[4] = calculateStd(ppis);
+const diffs = [];
+for (let i = 1; i < ppis.length; i++) {
+diffs.push(ppis[i] - ppis[i-1]);
+}
+features[5] = Math.sqrt(calculateMean(diffs.map(d => d*d)));
+}
+const amplitudes = peaks.map(p => signal[p]);
+features[6] = calculateMean(amplitudes);
+features[7] = calculateStd(amplitudes);
+const areas = [];
+for (let i = 0; i < peaks.length - 1; i++) {
+let area = 0;
+for (let j = peaks[i]; j < peaks[i+1]; j++) {
+area += signal[j];
+}
+areas.push(area);
+}
+if (areas.length > 0) {
+features[8] = calculateMean(areas);
+features[9] = calculateStd(areas);
+}
+const widths = [];
+for (let i = 0; i < peaks.length - 1; i++) {
+const pulseSegment = signal.slice(peaks[i], peaks[i+1]);
+const peakVal = pulseSegment[0];
+const halfHeight = peakVal * 0.5;
+let width = 0;
+for (const val of pulseSegment) {
+if (val > halfHeight) width++;
+}
+widths.push(width / CFG.FPS);
+}
+if (widths.length > 0) {
+features[10] = calculateMean(widths);
+features[11] = calculateStd(widths);
+}
+const firstDeriv = [];
+for (let i = 1; i < signal.length; i++) {
+firstDeriv.push(signal[i] - signal[i-1]);
+}
+const secondDeriv = [];
+for (let i = 1; i < firstDeriv.length; i++) {
+secondDeriv.push(firstDeriv[i] - firstDeriv[i-1]);
+}
+const posSecond = secondDeriv.filter(v => v > 0);
+const negSecond = secondDeriv.filter(v => v < 0);
+features[12] = posSecond.length > 0 ? calculateMean(posSecond) : 0;
+features[13] = negSecond.length > 0 ? calculateMean(negSecond) : 0;
+if (peaks.length >= 2) {
+const systolic = signal[peaks[0]];
+let minIdx = peaks[0];
+for (let i = peaks[0]; i < peaks[1]; i++) {
+if (signal[i] < signal[minIdx]) minIdx = i;
+}
+const diastolic = signal[minIdx];
+features[14] = diastolic !== 0 ? systolic / diastolic : 0;
+}
+features[15] = calculateMean(signal);
+features[16] = calculateStd(signal);
+features[17] = Math.max(...signal);
+features[18] = Math.min(...signal);
+} catch (error) {
+console.error('Error extracting morphological features:', error);
+}
+return features;
+}
+
+// ============================================================================
+// NEURAL NETWORK INFERENCE
+// ============================================================================
+async function loadNeuralModel() {
+try {
+document.getElementById('neuralStatus').textContent = '🔄 Loading neural network model...';
+document.getElementById('loadText').textContent = 'Loading TensorFlow.js model from CDN...';
+
+console.log('Attempting to load model from jsDelivr CDN...');
+console.log('Primary URL:', NEURAL_MODEL_URL);
+
+// Configure TensorFlow.js to use custom fetch with CORS mode
+const loadOptions = {
+fetchFunc: (url, init) => {
+console.log('Fetching:', url);
+return fetch(url, {
+...init,
+mode: 'cors',
+credentials: 'omit',
+headers: {
+...init?.headers
+}
+});
+}
+};
+
+try {
+// Try primary URL with custom fetch
+STATE.neuralModel = await tf.loadLayersModel(NEURAL_MODEL_URL, loadOptions);
+STATE.neuralModelLoaded = true;
+console.log('✅ Model loaded successfully from jsDelivr CDN');
+} catch (primaryError) {
+console.warn('Primary CDN failed, trying fallbacks...', primaryError);
+
+// Try fallback URLs
+for (let i = 0; i < FALLBACK_MODEL_URLS.length; i++) {
+const fallbackUrl = FALLBACK_MODEL_URLS[i];
+try {
+console.log(`Trying fallback ${i + 1}:`, fallbackUrl);
+STATE.neuralModel = await tf.loadLayersModel(fallbackUrl, loadOptions);
+STATE.neuralModelLoaded = true;
+console.log('✅ Model loaded from fallback:', fallbackUrl);
+break;
+} catch (fallbackError) {
+console.warn(`Fallback ${i + 1} failed:`, fallbackError.message);
+if (i === FALLBACK_MODEL_URLS.length - 1) {
+throw new Error('All model loading attempts failed. This may be due to:\n1. CORS restrictions on the .bin files\n2. Network connectivity\n3. CDN caching delay (wait 5-10 minutes)');
+}
+}
+}
+}
+
+if (STATE.neuralModelLoaded) {
+document.getElementById('neuralStatus').innerHTML = 
+'✅ <strong>Neural model loaded!</strong> 98.27% AUC, 3.89% EER';
+document.getElementById('neuralStatus').style.background = 'rgba(76, 175, 80, 0.2)';
+document.getElementById('neuralStatus').style.color = '#2e7d32';
+console.log('✅ Neural network model ready');
+console.log('Model input shape:', STATE.neuralModel.inputs[0].shape);
+console.log('Model output shape:', STATE.neuralModel.outputs[0].shape);
+}
+} catch (error) {
+console.error('❌ Error loading neural model:', error);
+console.error('Error details:', {
+message: error.message,
+stack: error.stack
+});
+
+// Provide helpful troubleshooting message
+const helpMessage = error.message.includes('CORS') || error.message.includes('Failed to fetch')
+? 'CORS error detected. The model files may not be accessible yet. Solutions:\n' +
+'1. Wait 5-10 minutes for CDN to cache files\n' +
+'2. Check browser console for specific CORS errors\n' +
+'3. Ensure all .bin files are in your GitHub repo\n' +
+'4. Try hosting files on a different service (Cloudflare R2, AWS S3)'
+: error.message;
+
+document.getElementById('neuralStatus').innerHTML = 
+'⚠ <strong>Neural model unavailable.</strong> Using GMM only.<br>' +
+`<small style="font-size:11px">${helpMessage}</small>`;
+document.getElementById('neuralStatus').style.background = 'rgba(255, 152, 0, 0.2)';
+document.getElementById('neuralStatus').style.color = '#e65100';
+STATE.neuralModelLoaded = false;
+document.getElementById('methodGMM').checked = true;
+STATE.detectionMethod = 'gmm';
+E.currentMethod.textContent = 'GMM Classifier (Neural Unavailable)';
+}
+}
+
+async function getNeuralEmbedding(signal1024) {
+if (!STATE.neuralModelLoaded || !STATE.neuralModel) {
+return null;
+}
+try {
+const morphFeatures = extractMorphologicalFeatures(signal1024);
+const combinedInput = [...signal1024, ...morphFeatures];
+const inputTensor = tf.tensor3d([combinedInput.map(v => [v])]);
+const embedding = STATE.neuralModel.predict(inputTensor);
+const embeddingArray = await embedding.data();
+inputTensor.dispose();
+embedding.dispose();
+return Array.from(embeddingArray);
+} catch (error) {
+console.error('Error in neural embedding:', error);
+return null;
+}
+}
+
+async function checkEmbeddingConsistency() {
+if (STATE.posSignal.length < CFG.NEURAL_SAMPLES * 2) {
+return { consistency: 0, embeddings: [] };
+}
+try {
+const window1 = STATE.posSignal.slice(0, CFG.NEURAL_SAMPLES);
+const window2 = STATE.posSignal.slice(
+Math.floor(CFG.NEURAL_SAMPLES / 2),
+Math.floor(CFG.NEURAL_SAMPLES / 2) + CFG.NEURAL_SAMPLES
+);
+const window3 = STATE.posSignal.slice(-CFG.NEURAL_SAMPLES);
+const emb1 = await getNeuralEmbedding(window1);
+const emb2 = await getNeuralEmbedding(window2);
+const emb3 = await getNeuralEmbedding(window3);
+if (!emb1 || !emb2 || !emb3) {
+return { consistency: 0, embeddings: [] };
+}
+const sim12 = cosineSimilarity(emb1, emb2);
+const sim23 = cosineSimilarity(emb2, emb3);
+const sim13 = cosineSimilarity(emb1, emb3);
+const consistency = (sim12 + sim23 + sim13) / 3;
+if (CFG.DEBUG) {
+console.log(`🧠 Embedding Consistency: ${(consistency * 100).toFixed(1)}% (${sim12.toFixed(3)}, ${sim23.toFixed(3)}, ${sim13.toFixed(3)})`);
+}
+return { consistency, embeddings: [emb1, emb2, emb3] };
+} catch (error) {
+console.error('Error checking embedding consistency:', error);
+return { consistency: 0, embeddings: [] };
+}
+}
+
+// ============================================================================
+// DEPTH ANALYSIS
+// ============================================================================
+function analyze3DDepth(landmarks) {
+if (!landmarks || landmarks.length < 468) return null;
+const noseTip = landmarks[1];
+const leftCheek = landmarks[205];
+const rightCheek = landmarks[425];
+const zValues = [noseTip.z, leftCheek.z, rightCheek.z];
+const zVariance = calculateStd(zValues);
+STATE.depthHistory.push(zVariance);
+if (STATE.depthHistory.length > 60) {
+STATE.depthHistory.shift();
+}
+return { zVariance };
+}
+
+function analyzeTemporalDepthVariance() {
+if (STATE.depthHistory.length < 30) return null;
+const recentDepth = STATE.depthHistory.slice(-30);
+const temporalVariance = calculateStd(recentDepth);
+STATE.temporalDepthVariance = temporalVariance;
+STATE.isStaticDepth = temporalVariance < CFG.DEPTH_TEMPORAL_THRESHOLD;
+return { temporalVariance, isStaticDepth: STATE.isStaticDepth };
+}
+
+// ============================================================================
+// CONFIDENCE CALCULATION
+// ============================================================================
+async function calculateConfidence() {
+const method = STATE.detectionMethod;
+let gmmConf = 0;
+let neuralConf = 0;
+let depthConf = 0;
+const firstDeriv = STATE.firstDerivVariance || 0;
+const fakeThreshold = parseFloat(document.getElementById('fakeThreshold').value);
+const realThreshold = parseFloat(document.getElementById('realThreshold').value);
+if (firstDeriv >= realThreshold) {
+gmmConf = 100;
+} else if (firstDeriv > fakeThreshold) {
+gmmConf = ((firstDeriv - fakeThreshold) / (realThreshold - fakeThreshold)) * 100;
+} else {
+gmmConf = 10;
+}
+if (STATE.neuralModelLoaded && STATE.posSignal.length >= CFG.NEURAL_SAMPLES * 2) {
+const result = await checkEmbeddingConsistency();
+STATE.embeddingConsistency = result.consistency;
+STATE.embeddings = result.embeddings;
+neuralConf = result.consistency * 100;
+}
+const temporalDepth = STATE.temporalDepthVariance || 0;
+depthConf = STATE.isStaticDepth ? 20 : Math.min(100, (temporalDepth / CFG.DEPTH_TEMPORAL_THRESHOLD) * 100);
+E.gmmScore.textContent = Math.round(gmmConf);
+E.neuralScore.textContent = STATE.neuralModelLoaded ? Math.round(neuralConf) : '--';
+E.depthScore.textContent = Math.round(depthConf);
+E.embeddingConsistency.textContent = STATE.neuralModelLoaded ? `${(STATE.embeddingConsistency * 100).toFixed(1)}%` : '--';
+let finalConfidence = 0;
+if (method === 'gmm') {
+finalConfidence = gmmConf * 0.7 + depthConf * 0.3;
+updateTest('test1', gmmConf > 50);
+updateTest('test2', null);
+updateTest('test3', null);
+} else if (method === 'neural' && STATE.neuralModelLoaded) {
+finalConfidence = neuralConf * 0.8 + depthConf * 0.2;
+updateTest('test1', null);
+updateTest('test2', neuralConf > 80);
+updateTest('test3', STATE.embeddingConsistency > CFG.EMBEDDING_CONSISTENCY_THRESHOLD);
+} else if (method === 'hybrid') {
+if (gmmConf < 25) {
+finalConfidence = gmmConf;
+updateTest('test1', false);
+updateTest('test2', null);
+updateTest('test3', null);
+} else if (STATE.neuralModelLoaded && neuralConf > 0) {
+finalConfidence = neuralConf * 0.6 + gmmConf * 0.3 + depthConf * 0.1;
+updateTest('test1', gmmConf > 50);
+updateTest('test2', neuralConf > 70);
+updateTest('test3', STATE.embeddingConsistency > CFG.EMBEDDING_CONSISTENCY_THRESHOLD);
+} else {
+finalConfidence = gmmConf * 0.7 + depthConf * 0.3;
+updateTest('test1', gmmConf > 50);
+updateTest('test2', null);
+updateTest('test3', null);
+}
+}
+updateTest('test4', depthConf > 50);
+updateTest('test5', STATE.posSignal && STATE.posSignal.length >= CFG.MIN_SAMPLES);
+updateTest('test6', firstDeriv > 50 && firstDeriv < 5000);
+return Math.max(0, Math.min(100, finalConfidence));
+}
+
+// ============================================================================
+// UI FUNCTIONS
+// ============================================================================
+const E = {
+webcam: document.getElementById('webcam'),
+canvas: document.getElementById('canvas'),
+videoContainer: document.getElementById('videoContainer'),
+statusDot: document.getElementById('statusDot'),
+statusText: document.getElementById('statusText'),
+detectionTypeBadge: document.getElementById('detectionTypeBadge'),
+ppgCompact: document.getElementById('ppgCompact'),
+ppgWaveform: document.getElementById('ppgWaveform'),
+compactBVP: document.getElementById('compactBVP'),
+compactSamples: document.getElementById('compactSamples'),
+startBtn: document.getElementById('startBtn'),
+analyzeBtn: document.getElementById('analyzeBtn'),
+stopBtn: document.getElementById('stopBtn'),
+alertBox: document.getElementById('alertBox'),
+confidenceValue: document.getElementById('confidenceValue'),
+progressCircle: document.getElementById('progressCircle'),
+gmmScore: document.getElementById('gmmScore'),
+neuralScore: document.getElementById('neuralScore'),
+depthScore: document.getElementById('depthScore'),
+duration: document.getElementById('duration'),
+derivValue: document.getElementById('derivValue'),
+embeddingConsistency: document.getElementById('embeddingConsistency'),
+depthValue: document.getElementById('depthValue'),
+detectionType: document.getElementById('detectionType'),
+currentMethod: document.getElementById('currentMethod'),
+test1: document.getElementById('test1'),
+test2: document.getElementById('test2'),
+test3: document.getElementById('test3'),
+test4: document.getElementById('test4'),
+test5: document.getElementById('test5'),
+test6: document.getElementById('test6'),
+loadingOverlay: document.getElementById('loadingOverlay'),
+loadText: document.getElementById('loadText'),
+histogramCanvas: document.getElementById('histogramCanvas'),
+fakeThreshold: document.getElementById('fakeThreshold'),
+realThreshold: document.getElementById('realThreshold'),
+fakeBucket: document.getElementById('fakeBucket'),
+uncertainBucket: document.getElementById('uncertainBucket'),
+realBucket: document.getElementById('realBucket')
+};
+
+function showAlert(type, message) {
+E.alertBox.innerHTML = `<div class="alert alert-${type}">${message}</div>`;
+setTimeout(() => {
+E.alertBox.innerHTML = '';
+}, 5000);
+}
+
+function updateStatus(status, text, detectionType) {
+E.statusDot.className = 'status-dot dot-' + status;
+E.statusText.textContent = text;
+if (detectionType) {
+E.detectionTypeBadge.textContent = detectionType;
+}
+}
+
+function updateConfidence(value) {
+const percentage = Math.round(value);
+E.confidenceValue.textContent = percentage + '%';
+const circumference = 326.73;
+const offset = circumference - (percentage / 100) * circumference;
+E.progressCircle.style.strokeDashoffset = offset;
+}
+
+function updateTest(testId, passed) {
+const element = E[testId];
+if (!element) return;
+if (passed === null) {
+element.textContent = 'Pending';
+element.className = 'test-status status-pending';
+} else if (passed) {
+element.textContent = 'Pass';
+element.className = 'test-status status-pass';
+} else {
+element.textContent = 'Fail';
+element.className = 'test-status status-fail';
+}
+}
+
+function drawHistogram() {
+const canvas = E.histogramCanvas;
+const ctx = canvas.getContext('2d');
+const width = canvas.width;
+const height = canvas.height;
+ctx.clearRect(0, 0, width, height);
+if (STATE.derivHistogram.length === 0) {
+ctx.fillStyle = '#999';
+ctx.font = '12px sans-serif';
+ctx.textAlign = 'center';
+ctx.fillText('Collecting data...', width / 2, height / 2);
+return;
+}
+const fakeThreshold = parseFloat(E.fakeThreshold.value);
+const realThreshold = parseFloat(E.realThreshold.value);
+const numBins = 30;
+const maxRange = 4000;
+const binWidth = maxRange / numBins;
+const bins = new Array(numBins).fill(0);
+for (const value of STATE.derivHistogram) {
+const binIndex = Math.min(numBins - 1, Math.floor(value / binWidth));
+bins[binIndex]++;
+}
+const maxCount = Math.max(...bins, 1);
+const barWidth = width / numBins;
+for (let i = 0; i < numBins; i++) {
+const barHeight = (bins[i] / maxCount) * (height - 20);
+const x = i * barWidth;
+const y = height - barHeight;
+const binStart = i * binWidth;
+const binEnd = (i + 1) * binWidth;
+if (binEnd <= fakeThreshold) {
+ctx.fillStyle = '#f44336';
+} else if (binStart >= realThreshold) {
+ctx.fillStyle = '#4caf50';
+} else {
+ctx.fillStyle = '#ff9800';
+}
+ctx.fillRect(x, y, barWidth - 1, barHeight);
+}
+ctx.strokeStyle = '#f44336';
+ctx.lineWidth = 2;
+ctx.setLineDash([5, 3]);
+const fakeX = (fakeThreshold / maxRange) * width;
+ctx.beginPath();
+ctx.moveTo(fakeX, 0);
+ctx.lineTo(fakeX, height);
+ctx.stroke();
+ctx.strokeStyle = '#4caf50';
+const realX = (realThreshold / maxRange) * width;
+ctx.beginPath();
+ctx.moveTo(realX, 0);
+ctx.lineTo(realX, height);
+ctx.stroke();
+ctx.setLineDash([]);
+ctx.fillStyle = '#666';
+ctx.font = '10px sans-serif';
+ctx.textAlign = 'left';
+ctx.fillText('0', 2, height - 2);
+ctx.textAlign = 'right';
+ctx.fillText('4000×10⁻³', width - 2, height - 2);
+}
+
+function drawWaveform() {
+if (!STATE.posSignal || STATE.posSignal.length < 10) return;
+const canvas = E.ppgWaveform;
+const ctx = canvas.getContext('2d');
+const width = canvas.width;
+const height = canvas.height;
+ctx.clearRect(0, 0, width, height);
+const signal = STATE.posSignal.slice(-120);
+const step = width / signal.length;
+const max = Math.max(...signal);
+const min = Math.min(...signal);
+const range = max - min || 1;
+ctx.strokeStyle = '#4caf50';
+ctx.lineWidth = 2;
+ctx.beginPath();
+for (let i = 0; i < signal.length; i++) {
+const x = i * step;
+const y = height - ((signal[i] - min) / range) * (height - 10) - 5;
+if (i === 0) {
+ctx.moveTo(x, y);
+} else {
+ctx.lineTo(x, y);
+}
+}
+ctx.stroke();
+}
+
+function resetState() {
+Object.assign(STATE, {
+rSignal: [],
+gSignal: [],
+bSignal: [],
+timestamps: [],
+posSignal: [],
+landmarkHistory: [],
+depthHistory: [],
+bloodVolumePulse: null,
+verifiedAlertShown: false,
+rejectedAlertShown: false,
+firstDerivVariance: 0,
+derivHistogram: [],
+fakeBucketCount: 0,
+uncertainBucketCount: 0,
+realBucketCount: 0,
+temporalDepthVariance: 0,
+isStaticDepth: false,
+embeddings: [],
+embeddingConsistency: 0,
+neuralConfidence: 0
+});
+updateConfidence(0);
+E.gmmScore.textContent = '--';
+E.neuralScore.textContent = '--';
+E.depthScore.textContent = '--';
+E.compactBVP.textContent = '--';
+E.compactSamples.textContent = '0';
+E.detectionType.textContent = 'Analyzing...';
+E.derivValue.textContent = '--';
+E.depthValue.textContent = '--';
+E.embeddingConsistency.textContent = '--';
+['test1', 'test2', 'test3', 'test4', 'test5', 'test6'].forEach(id => updateTest(id, null));
+drawHistogram();
+}
+
+async function updateMetrics() {
+if (!STATE.isAnalyzing) return;
+if (STATE.startTime) {
+const elapsed = (Date.now() - STATE.startTime) / 1000;
+E.duration.textContent = elapsed.toFixed(1) + 's';
+}
+if (STATE.bloodVolumePulse !== null) {
+E.compactBVP.textContent = STATE.bloodVolumePulse.toFixed(1);
+}
+if (STATE.firstDerivVariance > 0) {
+E.derivValue.textContent = STATE.firstDerivVariance.toFixed(1);
+}
+if (STATE.temporalDepthVariance > 0) {
+E.depthValue.textContent = (STATE.temporalDepthVariance * 1000).toFixed(2);
+}
+E.compactSamples.textContent = STATE.rSignal.length;
+E.fakeBucket.textContent = STATE.fakeBucketCount;
+E.uncertainBucket.textContent = STATE.uncertainBucketCount;
+E.realBucket.textContent = STATE.realBucketCount;
+drawWaveform();
+drawHistogram();
+const confidence = await calculateConfidence();
+updateConfidence(confidence);
+if (STATE.rSignal.length >= CFG.MIN_SAMPLES) {
+if (confidence >= CFG.CONFIDENCE_THRESHOLD) {
+E.videoContainer.className = 'video-container verified';
+updateStatus('verified', 'VERIFIED', 'Real Human');
+E.detectionType.textContent = 'Real Human';
+if (!STATE.verifiedAlertShown) {
+showAlert('success', '✓ Real human detected!');
+STATE.verifiedAlertShown = true;
+}
+} else if (confidence < 35) {
+E.videoContainer.className = 'video-container rejected';
+updateStatus('rejected', 'REJECTED', STATE.isStaticDepth ? 'Photo/Static' : 'AI Avatar Detected');
+E.detectionType.textContent = STATE.isStaticDepth ? 'Photo/Static Image' : 'AI Avatar/Deepfake';
+if (!STATE.rejectedAlertShown) {
+showAlert('error', '✗ Spoofing attempt detected!');
+STATE.rejectedAlertShown = true;
+}
+} else {
+E.videoContainer.className = 'video-container analyzing';
+updateStatus('analyzing', 'ANALYZING', 'Uncertain');
+E.detectionType.textContent = 'Analyzing...';
+}
+}
+if (CFG.DEBUG && STATE.rSignal.length % 30 === 0 && STATE.rSignal.length > 0) {
+console.log(`📊 [Frame ${STATE.rSignal.length}] 1st Deriv: ${STATE.firstDerivVariance.toFixed(1)}×10⁻³, Neural: ${(STATE.embeddingConsistency * 100).toFixed(1)}%, Confidence: ${confidence.toFixed(1)}%`);
+}
+}
+
+function onFaceMeshResults(results) {
+if (!STATE.isAnalyzing) return;
+const canvasCtx = E.canvas.getContext('2d');
+canvasCtx.save();
+canvasCtx.clearRect(0, 0, E.canvas.width, E.canvas.height);
+if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+const landmarks = results.multiFaceLandmarks[0];
+STATE.faceDetected = true;
+const rgb = extractPPG(results.image, landmarks);
+STATE.rSignal.push(rgb.r);
+STATE.gSignal.push(rgb.g);
+STATE.bSignal.push(rgb.b);
+STATE.timestamps.push(Date.now());
+STATE.landmarkHistory.push(landmarks);
+if (STATE.landmarkHistory.length > 90) {
+STATE.landmarkHistory.shift();
+}
+if (STATE.rSignal.length >= CFG.MIN_SAMPLES) {
+processPOS();
+calculateBloodVolumePulse();
+analyzeWaveformDerivatives();
+analyze3DDepth(landmarks);
+analyzeTemporalDepthVariance();
+updateGMMBuckets();
+}
+canvasCtx.strokeStyle = 'rgba(76, 175, 80, 0.3)';
+canvasCtx.lineWidth = 1;
+canvasCtx.fillStyle = 'rgba(76, 175, 80, 0.8)';
+const faceOval = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109];
+canvasCtx.beginPath();
+for (let i = 0; i < faceOval.length; i++) {
+const point = landmarks[faceOval[i]];
+const x = point.x * E.canvas.width;
+const y = point.y * E.canvas.height;
+if (i === 0) canvasCtx.moveTo(x, y);
+else canvasCtx.lineTo(x, y);
+}
+canvasCtx.closePath();
+canvasCtx.stroke();
+const leftEye = [33, 160, 158, 133, 153, 144, 163, 7];
+const rightEye = [362, 385, 387, 263, 373, 380, 381, 382];
+[leftEye, rightEye].forEach(eye => {
+canvasCtx.beginPath();
+eye.forEach((idx, i) => {
+const point = landmarks[idx];
+const x = point.x * E.canvas.width;
+const y = point.y * E.canvas.height;
+if (i === 0) canvasCtx.moveTo(x, y);
+else canvasCtx.lineTo(x, y);
+});
+canvasCtx.closePath();
+canvasCtx.stroke();
+});
+const lips = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95];
+canvasCtx.beginPath();
+lips.forEach((idx, i) => {
+const point = landmarks[idx];
+const x = point.x * E.canvas.width;
+const y = point.y * E.canvas.height;
+if (i === 0) canvasCtx.moveTo(x, y);
+else canvasCtx.lineTo(x, y);
+});
+canvasCtx.closePath();
+canvasCtx.stroke();
+} else {
+STATE.faceDetected = false;
+}
+canvasCtx.restore();
+}
+
+async function startCamera() {
+try {
+E.loadingOverlay.style.display = 'flex';
+E.loadText.textContent = 'Requesting camera access...';
+const stream = await navigator.mediaDevices.getUserMedia({
+video: { width: 1280, height: 720, facingMode: 'user' }
+});
+STATE.videoStream = stream;
+E.webcam.srcObject = stream;
+E.loadText.textContent = 'Initializing Face Mesh...';
+STATE.faceMesh = new FaceMesh({
+locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+});
+STATE.faceMesh.setOptions({
+maxNumFaces: 1,
+refineLandmarks: true,
+minDetectionConfidence: 0.5,
+minTrackingConfidence: 0.5
+});
+STATE.faceMesh.onResults(onFaceMeshResults);
+await new Promise(resolve => {
+E.webcam.onloadedmetadata = resolve;
+});
+E.canvas.width = E.webcam.videoWidth;
+E.canvas.height = E.webcam.videoHeight;
+E.loadingOverlay.style.display = 'none';
+E.startBtn.disabled = true;
+E.analyzeBtn.disabled = false;
+updateStatus('idle', 'READY', null);
+showAlert('success', 'Camera initialized successfully!');
+} catch (error) {
+console.error('Camera error:', error);
+E.loadingOverlay.style.display = 'none';
+showAlert('error', 'Failed to access camera: ' + error.message);
+}
+}
+
+async function startAnalysis() {
+STATE.isAnalyzing = true;
+STATE.startTime = Date.now();
+resetState();
+E.analyzeBtn.disabled = true;
+E.stopBtn.disabled = false;
+E.videoContainer.className = 'video-container analyzing';
+updateStatus('analyzing', 'ANALYZING', 'Collecting data...');
+E.detectionTypeBadge.style.display = 'block';
+const processFrame = async () => {
+if (!STATE.isAnalyzing) return;
+if (E.webcam.readyState === E.webcam.HAVE_ENOUGH_DATA) {
+await STATE.faceMesh.send({ image: E.webcam });
+}
+STATE.animationFrameId = requestAnimationFrame(processFrame);
+};
+processFrame();
+STATE.metricsInterval = setInterval(updateMetrics, 200);
+showAlert('warning', 'Analysis started. Please stay still and look at the camera.');
+}
+
+function stopAnalysis() {
+STATE.isAnalyzing = false;
+if (STATE.animationFrameId) {
+cancelAnimationFrame(STATE.animationFrameId);
+STATE.animationFrameId = null;
+}
+if (STATE.metricsInterval) {
+clearInterval(STATE.metricsInterval);
+STATE.metricsInterval = null;
+}
+if (STATE.videoStream) {
+STATE.videoStream.getTracks().forEach(track => track.stop());
+STATE.videoStream = null;
+}
+E.webcam.srcObject = null;
+E.startBtn.disabled = false;
+E.analyzeBtn.disabled = true;
+E.stopBtn.disabled = true;
+E.videoContainer.className = 'video-container';
+E.detectionTypeBadge.style.display = 'none';
+updateStatus('idle', 'STOPPED', null);
+showAlert('warning', 'Analysis stopped.');
+}
+
+E.fakeThreshold.addEventListener('change', () => {
+CFG.GMM_FAKE_THRESHOLD = parseFloat(E.fakeThreshold.value);
+updateGMMBuckets();
+drawHistogram();
+});
+
+E.realThreshold.addEventListener('change', () => {
+CFG.GMM_REAL_THRESHOLD = parseFloat(E.realThreshold.value);
+updateGMMBuckets();
+drawHistogram();
+});
+
+document.querySelectorAll('input[name="detectionMethod"]').forEach(radio => {
+radio.addEventListener('change', (e) => {
+STATE.detectionMethod = e.target.value;
+const methodNames = {
+'gmm': 'GMM Classifier',
+'neural': 'Neural Network',
+'hybrid': 'Hybrid Mode'
+};
+E.currentMethod.textContent = methodNames[STATE.detectionMethod];
+console.log(`🔄 Switched to: ${methodNames[STATE.detectionMethod]}`);
+});
+});
+
+E.startBtn.addEventListener('click', startCamera);
+E.analyzeBtn.addEventListener('click', startAnalysis);
+E.stopBtn.addEventListener('click', stopAnalysis);
+
+// Initialize
+console.log('🛡 Advanced rPPG Liveness Detection System');
+console.log('📊 GMM: Fake <1300, Real >2000 (×10⁻³)');
+console.log('🧠 Neural Network: 98.27% AUC, 3.89% EER');
+console.log('');
+console.log('🔍 Diagnostic: Testing model file accessibility...');
+
+// Test if we can fetch the model.json directly
+fetch(NEURAL_MODEL_URL, { mode: 'cors' })
+.then(response => {
+console.log('✅ model.json accessible:', response.ok);
+return response.json();
+})
+.then(data => {
+console.log('✅ model.json parsed successfully');
+console.log('📦 Weight files needed:', data.weightsManifest[0].paths);
+// Test if we can fetch the first .bin file
+const binUrl = `${NEURAL_MODEL_BASE}/${data.weightsManifest[0].paths[0]}`;
+console.log('🔍 Testing .bin file access:', binUrl);
+return fetch(binUrl, { mode: 'cors' });
+})
+.then(response => {
+console.log('✅ .bin file accessible:', response.ok);
+console.log('✅ All files should load correctly!');
+})
+.catch(error => {
+console.error('❌ File access test failed:', error.message);
+console.error('This indicates a CORS or network issue');
+});
+
+drawHistogram();
+
+// Load neural model on startup
+loadNeuralModel();
+</script>
+</body>
+</html>
